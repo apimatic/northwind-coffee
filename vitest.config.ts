@@ -12,6 +12,11 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             // Test-only value; real secrets live in .dev.vars / `wrangler secret put`.
             CSRF_SECRET: "test-only-csrf-secret-0123456789abcdef",
+            // Test-only PayPal settings: every PayPal request in tests is answered by a stubbed fetch.
+            PAYPAL_ENV: "sandbox",
+            PAYPAL_API_BASE: "https://paypal-gateway.test/s/with",
+            PAYPAL_CLIENT_ID: "test-client-id",
+            PAYPAL_CLIENT_SECRET: "test-client-secret",
           },
         },
       }),

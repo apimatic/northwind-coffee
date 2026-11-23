@@ -2,3 +2,9 @@
 # Generate one with: node -e "console.log(crypto.randomBytes(32).toString('hex'))"
 # In production, set it with: npx wrangler secret put CSRF_SECRET
 CSRF_SECRET=replace-with-at-least-32-random-characters
+
+# PayPal (sandbox). Credentials from the PayPal developer dashboard. All PayPal REST calls go through the egress
+# gateway in PAYPAL_API_BASE (not api-m.sandbox.paypal.com). In production: npx wrangler secret put <NAME>.
+PAYPAL_CLIENT_ID=
+PAYPAL_CLIENT_SECRET=
+PAYPAL_API_BASE=

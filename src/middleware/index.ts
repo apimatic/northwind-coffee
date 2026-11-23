@@ -3,6 +3,7 @@ import type { AppEnv } from "../env";
 import { ANON_COOKIE, clearCookie, readCookie, SESSION_COOKIE, writeCookie } from "../lib/cookies";
 import { CSRF_FIELD, CSRF_HEADER, csrfTokenFor, csrfTokensMatch } from "../lib/csrf";
 import { log } from "../lib/log";
+import { PAYPAL_FORM_ACTION_SOURCE } from "../lib/paypal";
 import { anonBuyerId, userBuyerId } from "../services/basket";
 import { resolveSession } from "../services/identity";
 import { renderErrorPage } from "../views/errors";
@@ -22,7 +23,8 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   const headers = c.res.headers;
   headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    // form-action allows PayPal because "Pay with PayPal" posts here and is redirected to PayPal's approval page.
+    `default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self' ${PAYPAL_FORM_ACTION_SOURCE}; frame-ancestors 'none'`,
   );
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Referrer-Policy", "strict-origin-when-cross-origin");

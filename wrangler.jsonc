@@ -7,6 +7,11 @@
     "enabled": true,
   },
   "workers_dev": true,
+  "vars": {
+    // Which PayPal environment PAYPAL_CLIENT_ID/SECRET and PAYPAL_API_BASE belong to: "sandbox" or "live".
+    // Decides the PayPal approval host buyers are sent to. The credentials and gateway URL are secrets.
+    "PAYPAL_ENV": "sandbox",
+  },
   "preview_urls": true,
   "assets": {
     "directory": "./public",

@@ -1,9 +1,9 @@
 import type { Child } from "hono/jsx";
 import { COUNTRIES, type OrderDetail, type OrderSummary } from "../services/orders";
-import { Alert, formatDate, Money, PageHeader, StatusBadge } from "./components";
+import { type PaymentInfo, paymentStatusLabel } from "../services/payments";
+import { Alert, CsrfField, formatDate, Money, PageHeader, StatusBadge } from "./components";
 import { Layout, type PageContext } from "./layout";
-
-export const AWAITING_PAYMENT_NOTE = "Online payment isn't available yet. We'll be in touch about payment.";
+import { canPayWithPaypal, PaymentStatusNote, PayWithPaypalForm } from "./payments";
 
 function countryName(code: string): string {
   return COUNTRIES.find(([c]) => c === code)?.[1] ?? code;
@@ -69,7 +69,12 @@ export function OrdersListView(props: { ctx: PageContext; orders: OrderSummary[]
   );
 }
 
-export function OrderDetailBody(props: { order: OrderDetail; showBuyer?: boolean; actions?: Child }) {
+export function OrderDetailBody(props: {
+  order: OrderDetail;
+  payment?: PaymentInfo | null;
+  showBuyer?: boolean;
+  actions?: Child;
+}) {
   const { order } = props;
   const ship = order.shipTo;
   return (
@@ -82,6 +87,12 @@ export function OrderDetailBody(props: { order: OrderDetail; showBuyer?: boolean
               <StatusBadge status={order.status} />
             </dd>
           </div>
+          {props.payment !== undefined ? (
+            <div>
+              <dt>Payment</dt>
+              <dd data-testid="payment-status">{paymentStatusLabel(props.payment)}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Placed</dt>
             <dd>{formatDate(order.createdAt)}</dd>
@@ -169,8 +180,26 @@ export function OrderDetailBody(props: { order: OrderDetail; showBuyer?: boolean
   );
 }
 
-export function OrderDetailView(props: { ctx: PageContext; order: OrderDetail; justPlaced: boolean }) {
-  const { order } = props;
+export type OrderNotice = "paypal_cancelled" | "paid" | "pending" | "confirming" | "declined";
+
+const NOTICES: Record<OrderNotice, { kind: "success" | "info" | "error"; text: string }> = {
+  paypal_cancelled: { kind: "info", text: "You left PayPal without paying. You can try again whenever you're ready." },
+  paid: { kind: "success", text: "Thank you! Your payment is complete." },
+  pending: { kind: "info", text: "PayPal accepted your payment and is still processing it." },
+  confirming: { kind: "info", text: "We're confirming your payment with PayPal. Check back in a moment." },
+  declined: { kind: "error", text: "PayPal declined the payment. You can try again." },
+};
+
+export function OrderDetailView(props: {
+  ctx: PageContext;
+  order: OrderDetail;
+  payment: PaymentInfo | null;
+  justPlaced: boolean;
+  notice?: OrderNotice | undefined;
+  paymentError?: string | undefined;
+}) {
+  const { order, payment } = props;
+  const notice = props.notice ? NOTICES[props.notice] : undefined;
   return (
     <Layout ctx={props.ctx} title={`Order #${order.id}`}>
       <PageHeader title={`Order #${order.id}`}>
@@ -181,11 +210,62 @@ export function OrderDetailView(props: { ctx: PageContext; order: OrderDetail; j
           <p>We've saved your order and emptied your basket.</p>
         </Alert>
       ) : null}
-      {order.status === "awaiting_payment" ? (
-        <Alert kind="info">
-          <p data-testid="payment-note">{AWAITING_PAYMENT_NOTE}</p>
+      {notice ? (
+        <Alert kind={notice.kind}>
+          <p data-testid="payment-notice">{notice.text}</p>
         </Alert>
       ) : null}
+      {props.paymentError ? (
+        <Alert kind="error" title="We couldn't start the PayPal payment.">
+          <p data-testid="payment-error">{props.paymentError}</p>
+        </Alert>
+      ) : null}
+      {order.status === "awaiting_payment" ? (
+        <Alert kind="info">
+          <PaymentStatusNote payment={payment} />
+        </Alert>
+      ) : null}
+      <OrderDetailBody
+        order={order}
+        payment={payment}
+        actions={
+          canPayWithPaypal(order, payment) ? (
+            <PayWithPaypalForm
+              orderId={order.id}
+              csrfToken={props.ctx.csrfToken}
+              label={payment?.state === "declined" ? "Try PayPal again" : "Pay with PayPal"}
+            />
+          ) : null
+        }
+      />
+    </Layout>
+  );
+}
+
+export function PaypalConfirmView(props: { ctx: PageContext; order: OrderDetail; error?: string | undefined }) {
+  const { order } = props;
+  return (
+    <Layout ctx={props.ctx} title={`Confirm payment for order #${order.id}`}>
+      <PageHeader title={`Confirm payment for order #${order.id}`}>
+        <a href={`/orders/${order.id}`}>Back to order</a>
+      </PageHeader>
+      {props.error ? (
+        <Alert kind="error" title="The payment didn't go through.">
+          <p data-testid="payment-error">{props.error}</p>
+        </Alert>
+      ) : null}
+      <div class="card form-card">
+        <p>You've approved the payment on PayPal. Nothing has been charged yet.</p>
+        <form method="post" action={`/orders/${order.id}/paypal/capture`} data-disable-on-submit>
+          <CsrfField token={props.ctx.csrfToken} />
+          <button type="submit" class="button" data-testid="confirm-payment">
+            Pay <Money cents={order.totalCents} currency={order.currency} /> now
+          </button>
+        </form>
+        {props.error ? (
+          <PayWithPaypalForm orderId={order.id} csrfToken={props.ctx.csrfToken} label="Go back to PayPal" />
+        ) : null}
+      </div>
       <OrderDetailBody order={order} />
     </Layout>
   );

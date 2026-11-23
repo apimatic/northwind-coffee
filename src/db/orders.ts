@@ -148,20 +148,3 @@ export async function listOrderItems(db: D1Database, orderId: number): Promise<O
     .all<OrderItemRow>();
   return results;
 }
-
-/** Changes the status only if the order is currently in `fromStatus`. Returns true if it changed. */
-export async function transitionOrderStatus(
-  db: D1Database,
-  orderId: number,
-  fromStatus: string,
-  toStatus: string,
-): Promise<boolean> {
-  const result = await db
-    .prepare(
-      `UPDATE orders SET status = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?1 AND status = ?2`,
-    )
-    .bind(orderId, fromStatus, toStatus)
-    .run();
-  return result.meta.changes === 1;
-}

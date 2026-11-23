@@ -1,9 +1,26 @@
 import type { Child } from "hono/jsx";
 import type { CatalogItem } from "../services/catalog";
 import { canCancel, ORDER_STATUSES, type OrderDetail, type OrderSummary, STATUS_LABELS } from "../services/orders";
+import type { PaymentInfo } from "../services/payments";
 import { Alert, CsrfField, Money, PageHeader } from "./components";
 import { Layout, type PageContext } from "./layout";
 import { OrderDetailBody, OrdersTable } from "./orders";
+import { AdminPaymentPanel } from "./payments";
+
+export type AdminOrderNotice =
+  "cancelled" | "not_cancellable" | "refunded" | "refund_pending" | "refund_unknown" | "refund_duplicate";
+
+const ADMIN_NOTICES: Record<AdminOrderNotice, { kind: "success" | "info" | "error"; text: string }> = {
+  cancelled: { kind: "success", text: "The order was cancelled." },
+  not_cancellable: { kind: "error", text: "Only unpaid orders awaiting payment can be cancelled." },
+  refunded: { kind: "success", text: "PayPal completed the refund." },
+  refund_pending: { kind: "info", text: "PayPal accepted the refund and is still processing it." },
+  refund_unknown: {
+    kind: "info",
+    text: "We couldn't confirm the refund with PayPal yet. Its amount stays reserved; use “Check refund status”.",
+  },
+  refund_duplicate: { kind: "info", text: "That refund was already submitted." },
+};
 
 function AdminNav(props: { current: "orders" | "catalog" }) {
   return (
@@ -62,9 +79,14 @@ export function AdminOrdersView(props: { ctx: PageContext; orders: OrderSummary[
 export function AdminOrderView(props: {
   ctx: PageContext;
   order: OrderDetail;
-  notice?: "cancelled" | "not_cancellable";
+  payment: PaymentInfo | null;
+  refundKey: string;
+  notice?: AdminOrderNotice | undefined;
+  refundAmount?: string | undefined;
+  refundError?: string | undefined;
 }) {
   const { order } = props;
+  const notice = props.notice ? ADMIN_NOTICES[props.notice] : undefined;
   const actions = canCancel(order) ? (
     <form method="post" action={`/admin/orders/${order.id}/cancel`} class="order-actions" data-disable-on-submit>
       <CsrfField token={props.ctx.csrfToken} />
@@ -78,11 +100,20 @@ export function AdminOrderView(props: {
       <PageHeader title={`Order #${order.id}`}>
         <a href="/admin/orders">Back to all orders</a>
       </PageHeader>
-      {props.notice === "cancelled" ? <Alert kind="success">The order was cancelled.</Alert> : null}
-      {props.notice === "not_cancellable" ? (
-        <Alert kind="error">Only orders awaiting payment can be cancelled.</Alert>
+      {notice ? (
+        <Alert kind={notice.kind}>
+          <p data-testid="admin-notice">{notice.text}</p>
+        </Alert>
       ) : null}
-      <OrderDetailBody order={order} showBuyer actions={actions} />
+      <OrderDetailBody order={order} payment={props.payment} showBuyer actions={actions} />
+      <AdminPaymentPanel
+        orderId={order.id}
+        payment={props.payment}
+        csrfToken={props.ctx.csrfToken}
+        refundKey={props.refundKey}
+        refundAmount={props.refundAmount}
+        refundError={props.refundError}
+      />
     </AdminLayout>
   );
 }

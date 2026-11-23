@@ -1,6 +1,8 @@
 import type { Context } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
+import { log } from "../lib/log";
+import { type Paypal, PaypalConfigError, paypalFor } from "../lib/paypal";
 import { countUnits } from "../services/basket";
 import type { FieldErrors } from "../views/components";
 import type { PageContext } from "../views/layout";
@@ -43,3 +45,19 @@ export async function formValues(c: AppContext): Promise<Record<string, string>>
   }
   return values;
 }
+
+/** The PayPal client for this Worker, or null (logged) when its configuration is missing or invalid. */
+export function paypalOrNull(c: AppContext): Paypal | null {
+  try {
+    return paypalFor(c.env);
+  } catch (error) {
+    if (!(error instanceof PaypalConfigError)) throw error;
+    log({ event: "error", method: c.req.method, path: c.req.path, name: error.name, message: error.message });
+    return null;
+  }
+}
+
+export const PAYPAL_UNAVAILABLE = {
+  title: "PayPal is unavailable",
+  message: "We can't take PayPal payments right now. Please try again later.",
+};

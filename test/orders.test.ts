@@ -28,7 +28,9 @@ describe("orders", () => {
     expect(response.status).toBe(200);
     expect(html).toContain(`Order #${orderId}`);
     expect(html).toContain("Thank you! Your order has been placed.");
-    expect(html).toContain("Online payment isn&#39;t available yet. We&#39;ll be in touch about payment.");
+    expect(html).toContain("Pay securely with PayPal.");
+    expect(html).toContain('data-testid="pay-with-paypal"');
+    expect(html).toMatch(/data-testid="payment-status">Not paid</);
     expect(html).toContain("Awaiting payment");
     expect(html).toContain("$22.50");
   });

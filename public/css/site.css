@@ -858,6 +858,30 @@ address {
   color: #4d4038;
 }
 
+.status-paid {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+
+/* Payments (admin) */
+.payment-panel {
+  margin-top: 24px;
+}
+
+.payment-panel h2,
+.refund-form h3 {
+  margin-top: 0;
+}
+
+.payment-panel .data-table {
+  margin: 16px 0;
+}
+
+.refund-form {
+  margin-top: 16px;
+  max-width: 420px;
+}
+
 /* Errors */
 .error-page {
   text-align: center;

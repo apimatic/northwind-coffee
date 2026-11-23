@@ -81,8 +81,10 @@ test("shopper journey: browse, filter, basket, register, checkout, orders; admin
   await expect(page.getByRole("heading", { name: `Order #${orderId}` })).toBeVisible();
   await expect(page.getByText("Thank you! Your order has been placed.")).toBeVisible();
   await expect(page.getByTestId("payment-note")).toHaveText(
-    "Online payment isn't available yet. We'll be in touch about payment.",
+    "Pay securely with PayPal. You'll approve the payment on PayPal and come back here.",
   );
+  await expect(page.getByTestId("payment-status")).toHaveText("Not paid");
+  await expect(page.getByTestId("pay-with-paypal")).toBeVisible();
   await expect(page.getByTestId("order-status")).toHaveText("Awaiting payment");
   await expect(page.getByTestId("order-total")).toHaveText("$96.00");
   await expect(page.getByTestId("order-line")).toHaveCount(2);

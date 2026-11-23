@@ -35,3 +35,26 @@ export function formatMoney(cents: Cents, currency: string = DEFAULT_CURRENCY): 
   }
   return formatter.format(assertCents(cents) / 100);
 }
+
+const DECIMAL_AMOUNT = /^(\d{1,9})(?:\.(\d{1,2}))?$/;
+
+/**
+ * Parses a decimal amount with at most two fraction digits ("12", "12.3", "12.34") into cents, using integer
+ * arithmetic only. Returns null for anything else. Used for PayPal amounts and amounts typed into forms.
+ */
+export function parseDecimalAmount(value: string): Cents | null {
+  const match = DECIMAL_AMOUNT.exec(value.trim());
+  if (!match) return null;
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] ?? "").padEnd(2, "0"));
+  const cents = whole * 100 + fraction;
+  return Number.isSafeInteger(cents) ? cents : null;
+}
+
+/** Formats cents as a decimal amount string for an API, e.g. 1950 -> "19.50". */
+export function toDecimalAmount(cents: Cents): string {
+  assertCents(cents);
+  const whole = Math.trunc(cents / 100);
+  const fraction = cents % 100;
+  return `${whole}.${String(fraction).padStart(2, "0")}`;
+}

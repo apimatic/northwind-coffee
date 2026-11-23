@@ -11,10 +11,15 @@ It follows the shape of Microsoft's [eShopOnWeb](https://github.com/dotnet-archi
   unit price) are snapshotted into the order; the basket is emptied. Resubmitting the same checkout form never creates a
   second order.
 - **Orders** (`/orders`, `/orders/:id`): a buyer sees only their own orders. New orders are `awaiting_payment`.
+- **PayPal checkout**: on an order awaiting payment, **Pay with PayPal** creates a PayPal order and sends the buyer to
+  PayPal to approve it; PayPal sends them back to a confirm page, and **Pay now** captures the payment. The order
+  becomes `paid` only when PayPal reports the capture `COMPLETED` for exactly the order total. The order page and admin
+  show the payment status. Admins refund paid orders from the admin order page, in full or in part.
 - **Identity**: register, sign in, sign out. PBKDF2-SHA256 (100,000 iterations, per-user salt) via WebCrypto;
   server-side sessions in D1; `HttpOnly; Secure; SameSite=Lax` cookies.
-- **Admin** (`/admin`, role `admin`): all orders (newest first, status filter), order detail with **Cancel order**
-  (only from `awaiting_payment`), read-only catalog.
+- **Admin** (`/admin`, role `admin`): all orders (newest first, status filter), order detail with payment details,
+  PayPal refunds and **Cancel order** (only from `awaiting_payment`, and not once a PayPal capture has started),
+  read-only catalog.
 - **Public API**: `GET /api/catalog-items` (`pageIndex`, `pageSize`, `catalogBrandId`, `catalogTypeId`),
   `GET /api/catalog-items/:id`, `GET /api/catalog-brands`, `GET /api/catalog-types`.
 - **Health**: `GET /healthz` returns `{ "ok": true }` after a D1 query.
@@ -40,6 +45,32 @@ npm run dev                         # http://localhost:8787
 ```
 
 `.dev.vars` is git-ignored. In production, set the secret with `npx wrangler secret put CSRF_SECRET`.
+
+### PayPal
+
+PayPal needs `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_API_BASE` in `.dev.vars` (secrets in production).
+Every PayPal REST call, including the OAuth token request, goes to `PAYPAL_API_BASE` (our egress gateway), never
+straight to `api-m.paypal.com`. `PAYPAL_ENV` in `wrangler.jsonc` (`sandbox` or `live`) must match those credentials:
+it decides which PayPal approval host buyers may be redirected to. The integration uses the APIMatic-generated
+`paypal` TypeScript SDK (installed from GitHub); the contract notes are in `paypal-plan.md`.
+
+How the payment is kept safe against double clicks and lost answers:
+
+- One PayPal checkout per order (`paypal_payments.order_id` is the key), created with a stored `PayPal-Request-Id`,
+  so a retried **Pay with PayPal** gets the same PayPal order back.
+- The capture is claimed (`state = 'capturing'`) before PayPal is called, so it runs once. If PayPal's answer is lost,
+  the PayPal order is re-read; until PayPal confirms, the page says the payment is being confirmed, never that it
+  failed. Pending captures are re-checked when the order page is viewed.
+- Each refund is claimed (`paypal_refunds`, unique per refund form) with the refundable amount checked in the same
+  statement, and carries `custom_id = northwind-refund-<id>` so an unconfirmed refund can be found on the PayPal
+  order (**Check refund status**) If PayPal has no record of it, the check re-sends it with the original
+  `PayPal-Request-Id`, so PayPal never refunds it twice.
+- Timeouts and retries: each PayPal attempt times out after 10 s, and each operation's calls share a 25 s deadline
+  (plus 10 s to re-read PayPal after a lost answer). A 429 or 5xx is retried once, writes included (honouring
+  `Retry-After`), so a brief PayPal hiccup never reaches the shopper: the retry is the same request with the same
+  `PayPal-Request-Id`, which PayPal deduplicates. A write whose answer was lost (connection dropped, timeout) is not
+  re-sent; it is settled by re-reading PayPal. A 409 "still in progress" is never taken as a refusal. Retries log
+  `{"event":"paypal_retry",…}`.
 
 ### Seeding users
 
@@ -88,22 +119,24 @@ First-time e2e setup: `npx playwright install chromium`. The e2e server (`e2e/se
                    │
                    ├─ src/views/      hono/jsx server-rendered pages (layout, components, one file per area)
                    │
-                   ├─ src/services/   all business logic: catalog · basket · orders · identity
+                   ├─ src/services/   all business logic: catalog · basket · orders · payments (PayPal) · identity
                    │
                    ├─ src/db/         SQL only, parameterised statements, one file per aggregate
                    │
                    └─ src/lib/        money (integer cents) · password (PBKDF2) · csrf · cookies · log · encoding
-                                         │
-                                         ▼
-                                     D1 (DB) ── migrations/
+                                         │            · paypal (client, error translation)
+                                         ▼                         │
+                                     D1 (DB) ── migrations/        ▼
+                                                     PAYPAL_API_BASE (egress gateway) ──▶ PayPal REST API
 ```
 
-Each request logs one JSON line, `{"event":"request","method","path","status","ms"}`. Unhandled errors log
+Each request logs one JSON line, `{"event":"request","method","path","status","ms"}`. Each PayPal call outcome logs
+`{"event":"paypal","op","orderId","outcome",…}` with PayPal's `debugId` on errors (never tokens or bodies). Unhandled errors log
 `{"event":"error",…}` with the stack and render a friendly 500 page. With `observability.enabled`, these appear in
 Workers Logs.
 
 ## Deploying
 
-Not set up in this repository yet. `wrangler.jsonc` has a placeholder `database_id`. Create the database with
-`npx wrangler d1 create northwind-coffee`, put its id in `wrangler.jsonc`, apply migrations with
-`npm run db:migrate:remote`, set `CSRF_SECRET`, then `npx wrangler deploy`.
+The Worker `northwind-with-apimatic` uses the D1 database named in `wrangler.jsonc`. Apply migrations with
+`npm run db:migrate:remote`, set the secrets (`CSRF_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`,
+`PAYPAL_API_BASE`) with `npx wrangler secret put <NAME>`, check `PAYPAL_ENV`, then `npx wrangler deploy`.
