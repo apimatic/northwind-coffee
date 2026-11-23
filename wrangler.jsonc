@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "northwind-coffee",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-11-19",
+  "observability": {
+    "enabled": true,
+  },
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "northwind-coffee",
+      // Placeholder: local development and tests only. Replace with the real
+      // database_id (from `wrangler d1 create northwind-coffee`) before deploying.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+}

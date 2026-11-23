@@ -1,0 +1,4 @@
+# Copy to .dev.vars (git-ignored) and replace the value.
+# Generate one with: node -e "console.log(crypto.randomBytes(32).toString('hex'))"
+# In production, set it with: npx wrangler secret put CSRF_SECRET
+CSRF_SECRET=replace-with-at-least-32-random-characters
