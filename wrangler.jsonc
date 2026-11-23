@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "northwind-coffee",
+  "name": "northwind-without-apimatic",
   "main": "src/index.tsx",
   "compatibility_date": "2026-11-19",
   "observability": {
@@ -15,10 +15,10 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "northwind-coffee",
+      "database_name": "northwind-without-apimatic",
       // Placeholder: local development and tests only. Replace with the real
       // database_id (from `wrangler d1 create northwind-coffee`) before deploying.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "41bb1bcd-b56d-4edd-9a39-d2e1c6b2612f",
       "migrations_dir": "migrations",
     },
   ],
