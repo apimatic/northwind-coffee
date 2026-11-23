@@ -22,7 +22,8 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   const headers = c.res.headers;
   headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    // form-action also governs where a form POST may redirect: "Pay with PayPal" redirects to PayPal.
+    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self' https://www.paypal.com https://www.sandbox.paypal.com; frame-ancestors 'none'",
   );
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Referrer-Policy", "strict-origin-when-cross-origin");

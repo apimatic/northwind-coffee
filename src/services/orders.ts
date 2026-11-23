@@ -1,16 +1,20 @@
 import { z } from "zod";
 import * as ordersDb from "../db/orders";
+import * as paymentsDb from "../db/payments";
 import type { OrderItemRow, OrderRow, ShippingAddress } from "../db/orders";
 import { type Cents, DEFAULT_CURRENCY, lineTotal } from "../lib/money";
 import { userBuyerId } from "./basket";
 
 export type { ShippingAddress };
 
-export const ORDER_STATUSES = ["awaiting_payment", "cancelled"] as const;
+export const ORDER_STATUSES = ["awaiting_payment", "paid", "partially_refunded", "refunded", "cancelled"] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const STATUS_LABELS: Record<OrderStatus, string> = {
   awaiting_payment: "Awaiting payment",
+  paid: "Paid",
+  partially_refunded: "Partially refunded",
+  refunded: "Refunded",
   cancelled: "Cancelled",
 };
 
@@ -173,16 +177,15 @@ export async function getOrder(db: D1Database, orderId: number): Promise<OrderDe
   return withLines(db, await ordersDb.getOrder(db, orderId));
 }
 
-export function canCancel(order: Pick<OrderSummary, "status">): boolean {
-  return order.status === "awaiting_payment";
-}
-
-/** Cancels an order. Only orders awaiting payment can be cancelled. */
+/**
+ * Cancels an order. Only orders awaiting payment can be cancelled, and not while a PayPal capture
+ * is in flight or pending (or after one completed).
+ */
 export async function cancelOrder(
   db: D1Database,
   orderId: number,
 ): Promise<{ ok: true } | { ok: false; reason: "not_found" | "not_cancellable" }> {
-  const changed = await ordersDb.transitionOrderStatus(db, orderId, "awaiting_payment", "cancelled");
+  const changed = await paymentsDb.cancelUnpaidOrder(db, orderId);
   if (changed) return { ok: true };
   const order = await ordersDb.getOrder(db, orderId);
   return { ok: false, reason: order ? "not_cancellable" : "not_found" };

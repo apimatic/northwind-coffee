@@ -858,6 +858,60 @@ address {
   color: #4d4038;
 }
 
+.status-paid {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+
+.status-partially-refunded,
+.status-refunded {
+  background: #e8eef8;
+  color: #1f3d6b;
+}
+
+/* Payment */
+.payment-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.payment-panel h2,
+.payment-panel h3,
+.payment-panel p {
+  margin: 0;
+}
+
+.pay-form,
+.sync-form,
+.refund-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+.refund-form {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.pay-form .button {
+  align-self: flex-start;
+}
+
+.payment-panel code {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.payment-panel caption {
+  text-align: left;
+  font-weight: 700;
+  padding-bottom: 6px;
+}
+
 /* Errors */
 .error-page {
   text-align: center;

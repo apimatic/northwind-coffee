@@ -11,15 +11,38 @@ It follows the shape of Microsoft's [eShopOnWeb](https://github.com/dotnet-archi
   unit price) are snapshotted into the order; the basket is emptied. Resubmitting the same checkout form never creates a
   second order.
 - **Orders** (`/orders`, `/orders/:id`): a buyer sees only their own orders. New orders are `awaiting_payment`.
+- **PayPal payments**: on an unpaid order the buyer clicks **Pay with PayPal**, approves on PayPal and is sent back to
+  `/orders/:id/paypal/return`, where the store captures the payment. The order becomes `paid` only once PayPal reports
+  the capture `COMPLETED` for exactly the order total. Pending captures stay unpaid until PayPal completes them. See
+  [Payments](#payments).
 - **Identity**: register, sign in, sign out. PBKDF2-SHA256 (100,000 iterations, per-user salt) via WebCrypto;
   server-side sessions in D1; `HttpOnly; Secure; SameSite=Lax` cookies.
-- **Admin** (`/admin`, role `admin`): all orders (newest first, status filter), order detail with **Cancel order**
-  (only from `awaiting_payment`), read-only catalog.
+- **Admin** (`/admin`, role `admin`): all orders (newest first, status filter), order detail with payment status,
+  PayPal attempts and refunds, **Refund** (full or partial), **Check with PayPal** (re-checks anything still pending),
+  **Cancel order** (only from `awaiting_payment` with no capture in progress), read-only catalog.
 - **Public API**: `GET /api/catalog-items` (`pageIndex`, `pageSize`, `catalogBrandId`, `catalogTypeId`),
   `GET /api/catalog-items/:id`, `GET /api/catalog-brands`, `GET /api/catalog-types`.
 - **Health**: `GET /healthz` returns `{ "ok": true }` after a D1 query.
 
 All money is stored and computed as **integer cents** (USD).
+
+## Payments
+
+PayPal Orders v2 with `intent: CAPTURE`, server side only (no PayPal JavaScript; the CSP allows forms to redirect to
+`www.paypal.com` and `www.sandbox.paypal.com`). Every PayPal REST call goes to `PAYPAL_API_BASE`, our egress gateway,
+never to `api-m.paypal.com` directly; whether that reaches the sandbox or live PayPal is decided by the gateway and the
+credentials.
+
+- `payments` (migration `0003`) has one row per PayPal attempt: `created` → `capturing` → `captured` / `pending` /
+  `failed`, or `voided` if the buyer cancels on PayPal. The capture is claimed in D1 before PayPal is called, so an
+  order can't be cancelled or captured twice while a capture is in flight. A capture whose outcome is unknown (timeout,
+  5xx) is retried with the same `PayPal-Request-Id`, so PayPal never captures twice.
+- `refunds` reserve their amount before PayPal is called, so concurrent refunds can't exceed the captured amount. Each
+  refund form carries its own idempotency key. Order status follows completed refunds: `partially_refunded`, then
+  `refunded`.
+- There are no webhooks yet: pending captures/refunds, and calls whose outcome was unknown, are re-checked when the buyer
+  returns or when staff click **Check with PayPal**. Refunds made directly in the PayPal dashboard are not reflected.
+- Logs: `{"event":"payment",…}` and `{"event":"payment_error",…}` with PayPal's `debug_id`; never tokens or secrets.
 
 ## Stack
 
@@ -39,7 +62,8 @@ npm run db:migrate:local            # creates the local D1 database (schema + ca
 npm run dev                         # http://localhost:8787
 ```
 
-`.dev.vars` is git-ignored. In production, set the secret with `npx wrangler secret put CSRF_SECRET`.
+`.dev.vars` is git-ignored. It also needs `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_API_BASE` (see
+`.dev.vars.example`). In production, set each secret with `npx wrangler secret put <NAME>`.
 
 ### Seeding users
 
@@ -104,6 +128,6 @@ Workers Logs.
 
 ## Deploying
 
-Not set up in this repository yet. `wrangler.jsonc` has a placeholder `database_id`. Create the database with
-`npx wrangler d1 create northwind-coffee`, put its id in `wrangler.jsonc`, apply migrations with
-`npm run db:migrate:remote`, set `CSRF_SECRET`, then `npx wrangler deploy`.
+Apply migrations with `npm run db:migrate:remote` **before** deploying code that needs them, set the secrets
+(`CSRF_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_API_BASE`) with `npx wrangler secret put`, then
+`npx wrangler deploy`.

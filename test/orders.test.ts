@@ -22,13 +22,15 @@ describe("orders", () => {
     }
   });
 
-  it("shows the buyer's own order with the payment note", async () => {
+  it("shows the buyer's own order with the Pay with PayPal button", async () => {
     const { browser, orderId } = await customerWithOrder();
     const { response, html } = await browser.get(`/orders/${orderId}?placed=1`);
     expect(response.status).toBe(200);
     expect(html).toContain(`Order #${orderId}`);
     expect(html).toContain("Thank you! Your order has been placed.");
-    expect(html).toContain("Online payment isn&#39;t available yet. We&#39;ll be in touch about payment.");
+    expect(html).toContain('data-testid="payment-note"');
+    expect(html).toContain(`action="/orders/${orderId}/pay"`);
+    expect(html).toContain("Not paid");
     expect(html).toContain("Awaiting payment");
     expect(html).toContain("$22.50");
   });

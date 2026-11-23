@@ -1,9 +1,113 @@
 import type { Child } from "hono/jsx";
+import { formatMoney } from "../lib/money";
 import { COUNTRIES, type OrderDetail, type OrderSummary } from "../services/orders";
-import { Alert, formatDate, Money, PageHeader, StatusBadge } from "./components";
+import type { PaymentSummary } from "../services/payments";
+import { Alert, CsrfField, formatDate, Money, PageHeader, StatusBadge } from "./components";
 import { Layout, type PageContext } from "./layout";
 
-export const AWAITING_PAYMENT_NOTE = "Online payment isn't available yet. We'll be in touch about payment.";
+export const PAY_PROMPT = "Pay securely with PayPal. You'll approve the payment on PayPal and come back here.";
+
+const PAYMENT_NOTICES = {
+  paid: { kind: "success", title: "Payment received", text: "Thank you! PayPal has confirmed your payment." },
+  pending: {
+    kind: "info",
+    title: "Payment processing",
+    text: "PayPal is still processing your payment. We'll mark your order as paid as soon as it completes.",
+  },
+  declined: {
+    kind: "error",
+    title: "Payment declined",
+    text: "PayPal couldn't complete the payment. Please try again, perhaps with a different payment method.",
+  },
+  not_approved: {
+    kind: "info",
+    title: "Payment not completed",
+    text: "The payment wasn't approved on PayPal, so you haven't been charged. You can pay whenever you're ready.",
+  },
+  cancelled: {
+    kind: "info",
+    title: "Payment cancelled",
+    text: "You cancelled on PayPal, so you haven't been charged. You can pay whenever you're ready.",
+  },
+  not_payable: { kind: "info", title: "Payment not needed", text: "This order can no longer be paid." },
+  in_progress: {
+    kind: "info",
+    title: "Payment in progress",
+    text: "A payment for this order is already being processed.",
+  },
+  provider_error: {
+    kind: "error",
+    title: "PayPal is unavailable",
+    text: "We couldn't connect to PayPal. You haven't been charged. Please try again in a moment.",
+  },
+  error: {
+    kind: "error",
+    title: "We couldn't confirm your payment",
+    text: "We couldn't confirm your payment with PayPal yet. You won't be charged twice. Please check again in a moment.",
+  },
+  unknown: {
+    kind: "error",
+    title: "Payment not recognised",
+    text: "We couldn't match that PayPal payment to this order. You haven't been charged for it.",
+  },
+} as const satisfies Record<string, { kind: "error" | "info" | "success"; title: string; text: string }>;
+
+export type PaymentNotice = keyof typeof PAYMENT_NOTICES;
+
+export function parsePaymentNotice(value: string | undefined): PaymentNotice | undefined {
+  return value !== undefined && Object.hasOwn(PAYMENT_NOTICES, value) ? (value as PaymentNotice) : undefined;
+}
+
+/** One-line payment status for an order, e.g. "Paid", "Partially refunded ($5.00 of $22.50)". */
+export function paymentStatusText(order: Pick<OrderSummary, "status" | "currency">, payment: PaymentSummary): string {
+  const active = payment.active;
+  if (active?.status === "captured") {
+    if (payment.refundedCents === 0) return "Paid with PayPal";
+    const refunded = formatMoney(payment.refundedCents, order.currency);
+    const captured = formatMoney(payment.capturedCents, order.currency);
+    return payment.refundedCents >= payment.capturedCents
+      ? `Refunded in full (${refunded})`
+      : `Partially refunded (${refunded} of ${captured})`;
+  }
+  if (active?.status === "pending") return "Processing at PayPal";
+  if (active?.status === "capturing") return "Confirming with PayPal";
+  if (order.status === "cancelled") return "Not paid (order cancelled)";
+  if (payment.lastAttemptFailed) return "Not paid (last attempt declined)";
+  return "Not paid";
+}
+
+/** The buyer-facing payment card: status, and the Pay with PayPal button while payable. */
+export function PaymentPanel(props: { order: OrderDetail; payment: PaymentSummary; csrfToken: string }) {
+  const { order, payment } = props;
+  const active = payment.active;
+  return (
+    <section class="card payment-panel" aria-labelledby="payment-heading">
+      <h2 id="payment-heading">Payment</h2>
+      <p data-testid="payment-status">{paymentStatusText(order, payment)}</p>
+      {active?.status === "captured" ? (
+        <p class="muted">
+          <Money cents={active.capturedCents} currency={active.currency} /> paid on {formatDate(active.updatedAt)}.
+        </p>
+      ) : null}
+      {active?.status === "capturing" ? (
+        <p>
+          <a href={`/orders/${order.id}/paypal/return?token=${encodeURIComponent(active.providerOrderId)}`}>
+            Check payment status
+          </a>
+        </p>
+      ) : null}
+      {payment.canPay ? (
+        <form method="post" action={`/orders/${order.id}/pay`} class="pay-form" data-disable-on-submit>
+          <CsrfField token={props.csrfToken} />
+          <p data-testid="payment-note">{PAY_PROMPT}</p>
+          <button type="submit" class="button button-paypal">
+            Pay <Money cents={order.totalCents} currency={order.currency} /> with PayPal
+          </button>
+        </form>
+      ) : null}
+    </section>
+  );
+}
 
 function countryName(code: string): string {
   return COUNTRIES.find(([c]) => c === code)?.[1] ?? code;
@@ -169,8 +273,15 @@ export function OrderDetailBody(props: { order: OrderDetail; showBuyer?: boolean
   );
 }
 
-export function OrderDetailView(props: { ctx: PageContext; order: OrderDetail; justPlaced: boolean }) {
+export function OrderDetailView(props: {
+  ctx: PageContext;
+  order: OrderDetail;
+  payment: PaymentSummary;
+  justPlaced: boolean;
+  notice?: PaymentNotice | undefined;
+}) {
   const { order } = props;
+  const notice = props.notice ? PAYMENT_NOTICES[props.notice] : null;
   return (
     <Layout ctx={props.ctx} title={`Order #${order.id}`}>
       <PageHeader title={`Order #${order.id}`}>
@@ -181,11 +292,12 @@ export function OrderDetailView(props: { ctx: PageContext; order: OrderDetail; j
           <p>We've saved your order and emptied your basket.</p>
         </Alert>
       ) : null}
-      {order.status === "awaiting_payment" ? (
-        <Alert kind="info">
-          <p data-testid="payment-note">{AWAITING_PAYMENT_NOTE}</p>
+      {notice ? (
+        <Alert kind={notice.kind} title={notice.title}>
+          <p data-testid="payment-notice">{notice.text}</p>
         </Alert>
       ) : null}
+      <PaymentPanel order={order} payment={props.payment} csrfToken={props.ctx.csrfToken} />
       <OrderDetailBody order={order} />
     </Layout>
   );

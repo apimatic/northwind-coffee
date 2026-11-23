@@ -35,3 +35,22 @@ export function formatMoney(cents: Cents, currency: string = DEFAULT_CURRENCY): 
   }
   return formatter.format(assertCents(cents) / 100);
 }
+
+/** Formats cents as a plain decimal string with two places, e.g. 1950 -> "19.50" (for payment APIs). */
+export function centsToDecimal(cents: Cents): string {
+  assertCents(cents);
+  return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+}
+
+/**
+ * Parses a non-negative decimal amount with at most two decimal places ("19.5", "19.50", "$1,019.50")
+ * into cents without floating point. Returns null if the text is not a valid amount.
+ */
+export function parseDecimalToCents(text: string): Cents | null {
+  const match = /^\s*\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s*$/.exec(text);
+  if (!match) return null;
+  const whole = Number((match[1] ?? "").replaceAll(",", ""));
+  const fraction = Number((match[2] ?? "").padEnd(2, "0"));
+  const cents = whole * 100 + fraction;
+  return Number.isSafeInteger(cents) ? cents : null;
+}

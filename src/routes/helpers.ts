@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
+import { createPayPalClient, type PayPalClient, paypalConfigFromEnv } from "../lib/paypal";
 import { countUnits } from "../services/basket";
 import type { FieldErrors } from "../views/components";
 import type { PageContext } from "../views/layout";
@@ -42,4 +43,9 @@ export async function formValues(c: AppContext): Promise<Record<string, string>>
     if (typeof value === "string") values[key] = value;
   }
   return values;
+}
+
+/** PayPal client for this request; all calls go through PAYPAL_API_BASE (the egress gateway). */
+export function paypalClient(c: AppContext): PayPalClient {
+  return createPayPalClient(paypalConfigFromEnv(c.env));
 }

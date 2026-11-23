@@ -12,6 +12,11 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             // Test-only value; real secrets live in .dev.vars / `wrangler secret put`.
             CSRF_SECRET: "test-only-csrf-secret-0123456789abcdef",
+            // Tests never reach PayPal: test/fake-paypal.ts intercepts fetch to this gateway URL
+            // (with a path prefix, like the real egress gateway) and fails on any other host.
+            PAYPAL_API_BASE: "https://paypal-gateway.test/egress",
+            PAYPAL_CLIENT_ID: "test-client-id",
+            PAYPAL_CLIENT_SECRET: "test-client-secret",
           },
         },
       }),
