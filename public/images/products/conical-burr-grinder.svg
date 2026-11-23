@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="t">
+  <title id="t">Conical burr grinder (Fabrikam Farms)</title>
+  <rect width="400" height="400" fill="#f7f1e8"/>
+  <circle cx="200" cy="210" r="150" fill="#e9d8a6" opacity="0.28"/>
+  <ellipse cx="200" cy="336" rx="118" ry="12" fill="#2b1d16" opacity="0.12"/>
+  <path d="M164 96 L236 96 L246 150 L154 150 Z" fill="#e8f1f5" stroke="#9fb5bf" stroke-width="3"/>
+  <g transform="translate(186 128) rotate(-20)"><ellipse rx="10" ry="6.800000000000001" fill="#5b3a29"/><path d="M-8 0 C -3 -3, 3 3, 8 0" stroke="#000" stroke-opacity="0.35" stroke-width="1.4000000000000001" fill="none"/></g><g transform="translate(212 132) rotate(25)"><ellipse rx="10" ry="6.800000000000001" fill="#6d4532"/><path d="M-8 0 C -3 -3, 3 3, 8 0" stroke="#000" stroke-opacity="0.35" stroke-width="1.4000000000000001" fill="none"/></g><g transform="translate(198 114) rotate(5)"><ellipse rx="9" ry="6.12" fill="#6d4532"/><path d="M-7.2 0 C -2.6999999999999997 -2.6999999999999997, 2.6999999999999997 2.6999999999999997, 7.2 0" stroke="#000" stroke-opacity="0.35" stroke-width="1.2600000000000002" fill="none"/></g>
+  <rect x="146" y="150" width="108" height="158" rx="14" fill="#4a6b2a"/>
+  <rect x="160" y="176" width="80" height="20" rx="6" fill="#e9d8a6"/>
+  <circle cx="200" cy="232" r="22" fill="#e9d8a6"/>
+  <circle cx="200" cy="232" r="8" fill="#4a6b2a"/>
+  <rect x="164" y="266" width="72" height="34" rx="4" fill="#2b1d16" opacity="0.35"/>
+  <rect x="140" y="306" width="120" height="14" rx="6" fill="#2b1d16" opacity="0.7"/>
+</svg>

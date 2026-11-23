@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="t">
+  <title id="t">Gooseneck kettle (Tailspin Trading)</title>
+  <rect width="400" height="400" fill="#f7f1e8"/>
+  <circle cx="200" cy="210" r="150" fill="#e07a24" opacity="0.28"/>
+  <ellipse cx="200" cy="336" rx="118" ry="12" fill="#2b1d16" opacity="0.12"/>
+  <path d="M136 176 Q132 300 150 312 L262 312 Q280 300 276 176 Z" fill="#23395d"/>
+  <rect x="128" y="168" width="156" height="16" rx="8" fill="#8f8f8f"/>
+  <path d="M176 168 Q206 140 236 168 Z" fill="#8f8f8f"/>
+  <circle cx="206" cy="146" r="8" fill="#e07a24"/>
+  <path d="M276 200 Q316 204 314 250 Q312 280 276 288" stroke="#e07a24" stroke-width="14" fill="none" stroke-linecap="round"/>
+  <path d="M140 270 Q100 260 92 200 Q90 176 76 166" stroke="#8f8f8f" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <rect x="136" y="300" width="140" height="12" fill="#000" opacity="0.15"/>
+</svg>
