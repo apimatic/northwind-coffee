@@ -149,7 +149,9 @@ export function createPayPalClient(config: PayPalConfig): PayPalClient {
         accept: "application/json",
         prefer: "return=representation",
       };
-      if (options.body !== undefined) headers["content-type"] = "application/json";
+      // PayPal rejects POSTs without a JSON content type (415 UNSUPPORTED_MEDIA_TYPE), even with no
+      // body, e.g. capturing an order.
+      if (method === "POST") headers["content-type"] = "application/json";
       if (options.requestId) headers["paypal-request-id"] = options.requestId;
       const response = await fetch(url(path), {
         method,

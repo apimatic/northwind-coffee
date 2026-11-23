@@ -173,6 +173,43 @@ describe("PayPal checkout", () => {
     expect(await returnFromPayPal(browser, orderId, second)).toBe("paid");
   });
 
+  it("sends a JSON content type on every POST to PayPal, including the bodyless capture", async () => {
+    const paypal = installFakePayPal();
+    await paidOrder(paypal);
+    const posts = paypal.requests.filter((r) => r.method === "POST" && r.path.startsWith("/v2/"));
+    expect(posts.map((r) => r.path)).toEqual([expect.stringMatching(/orders$/), expect.stringMatching(/capture$/)]);
+    for (const post of posts) expect(post.contentType, post.path).toBe("application/json");
+  });
+
+  for (const rejection of [
+    { status: 415, name: "UNSUPPORTED_MEDIA_TYPE" },
+    { status: 400, name: "INVALID_REQUEST" },
+  ]) {
+    it(`doesn't call a capture PayPal rejected with ${rejection.status} a decline, and lets it be retried`, async () => {
+      const paypal = installFakePayPal();
+      const { browser, orderId } = await customerWithOrder();
+      const token = await startPayment(browser, orderId);
+      paypal.approve(token);
+      paypal.rejectNextCaptureWith = rejection;
+
+      expect(await returnFromPayPal(browser, orderId, token)).toBe("not_captured");
+      expect(await orderStatus(orderId)).toBe("awaiting_payment");
+      const [payment] = await listPaymentsForOrder(env.DB, orderId);
+      expect(payment?.status).toBe("created");
+      const page = await browser.get(`/orders/${orderId}?payment=not_captured`);
+      expect(page.html).toContain("Payment not taken");
+      expect(page.html).not.toContain("Payment declined");
+      expect(page.html).not.toContain("last attempt declined");
+
+      // The buyer's existing approval is captured on retry, with a fresh idempotency key.
+      expect(await returnFromPayPal(browser, orderId, token)).toBe("paid");
+      const captureCalls = paypal.calls("POST", /\/capture$/);
+      expect(captureCalls).toHaveLength(2);
+      expect(captureCalls[1]?.requestId).not.toBe(captureCalls[0]?.requestId);
+      expect(paypal.captures.size).toBe(1);
+    });
+  }
+
   it("retries a capture whose response was lost with the same idempotency key, capturing once", async () => {
     const paypal = installFakePayPal();
     const { browser, orderId } = await customerWithOrder();

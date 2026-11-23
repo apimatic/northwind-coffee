@@ -24,6 +24,11 @@ const PAYMENT_NOTICES = {
     title: "Payment not completed",
     text: "The payment wasn't approved on PayPal, so you haven't been charged. You can pay whenever you're ready.",
   },
+  not_captured: {
+    kind: "error",
+    title: "Payment not taken",
+    text: "Something went wrong taking your payment with PayPal, so you haven't been charged. Please try again in a moment.",
+  },
   cancelled: {
     kind: "info",
     title: "Payment cancelled",

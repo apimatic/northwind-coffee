@@ -37,6 +37,7 @@ export interface RecordedRequest {
   method: string;
   path: string;
   requestId: string | null;
+  contentType: string | null;
   body: Json | null;
 }
 
@@ -60,6 +61,8 @@ export class FakePayPal {
   loseNextResponseFor: "capture" | "refund" | null = null;
   /** Next refund is refused with 422 and this issue. */
   refuseNextRefund: string | null = null;
+  /** Next capture request is rejected outright with this HTTP status (e.g. 400), as PayPal does for bad requests. */
+  rejectNextCaptureWith: { status: number; name: string } | null = null;
   /** Overrides the captured amount (to simulate a mismatch). */
   captureValueOverride: string | null = null;
 
@@ -95,10 +98,10 @@ export class FakePayPal {
     }
     const path = request.url.slice(this.base.length).split("?")[0] ?? "";
     const text = new TextDecoder().decode(await request.arrayBuffer());
-    const contentType = request.headers.get("content-type") ?? "";
-    const body = text && contentType.includes("json") ? (JSON.parse(text) as Json) : null;
+    const contentType = request.headers.get("content-type");
+    const body = text && contentType?.includes("json") ? (JSON.parse(text) as Json) : null;
     const requestId = request.headers.get("paypal-request-id");
-    this.requests.push({ method: request.method, path, requestId, body });
+    this.requests.push({ method: request.method, path, requestId, contentType, body });
 
     if (request.method === "POST" && path === "/v1/oauth2/token") {
       const expected = `Basic ${btoa(`${env.PAYPAL_CLIENT_ID}:${env.PAYPAL_CLIENT_SECRET}`)}`;
@@ -112,6 +115,11 @@ export class FakePayPal {
 
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
     if (!this.tokens.has(bearer)) return json(401, { name: "AUTHENTICATION_FAILURE" });
+
+    // Like real PayPal: every v2 POST needs a JSON content type, even with no body (e.g. capture).
+    if (request.method === "POST" && !contentType?.startsWith("application/json")) {
+      return json(415, { name: "UNSUPPORTED_MEDIA_TYPE", message: "The request payload is not supported" });
+    }
 
     if (requestId && this.idempotent.has(`${path}|${requestId}`)) {
       const cached = this.idempotent.get(`${path}|${requestId}`) as { status: number; body: Json };
@@ -165,6 +173,11 @@ export class FakePayPal {
     if (captureOrderId) {
       const order = this.orders.get(captureOrderId);
       if (!order) return json(404, { name: "RESOURCE_NOT_FOUND", details: [{ issue: "INVALID_RESOURCE_ID" }] });
+      if (this.rejectNextCaptureWith) {
+        const { status, name } = this.rejectNextCaptureWith;
+        this.rejectNextCaptureWith = null;
+        return json(status, { name, message: "fake rejection", details: [] });
+      }
       if (order.status === "COMPLETED") return unprocessable("ORDER_ALREADY_CAPTURED");
       if (order.status !== "APPROVED") return unprocessable("ORDER_NOT_APPROVED");
       if (this.declineNextCapture) {

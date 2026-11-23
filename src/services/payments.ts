@@ -209,7 +209,15 @@ export async function startPayPalCheckout(
 export const paypalTokenSchema = z.string().regex(/^[A-Z0-9]{8,40}$/);
 
 export type ReturnOutcome =
-  "paid" | "pending" | "declined" | "not_approved" | "not_payable" | "in_progress" | "unknown" | "error";
+  | "paid"
+  | "pending"
+  | "declined"
+  | "not_approved"
+  | "not_captured"
+  | "not_payable"
+  | "in_progress"
+  | "unknown"
+  | "error";
 
 /**
  * Handles the buyer coming back from PayPal after approving: captures the payment and marks the
@@ -273,8 +281,15 @@ async function captureClaimed(db: D1Database, paypal: PayPalClient, row: Payment
         await paymentsDb.releaseCaptureClaim(db, payment.id);
         return "not_approved";
       }
-      await paymentsDb.markPaymentFailed(db, payment.id, error.issue ?? error.errorName);
-      return "declined";
+      if (error.status === 422) {
+        // Business refusal (e.g. INSTRUMENT_DECLINED, TRANSACTION_REFUSED): the payment was declined.
+        await paymentsDb.markPaymentFailed(db, payment.id, error.issue ?? error.errorName);
+        return "declined";
+      }
+      // PayPal rejected the request itself (400, 403, 404, 415, ...): no money moved and the buyer did
+      // nothing wrong. Release the claim so the same approved payment can be captured on retry.
+      await paymentsDb.releaseCaptureClaim(db, payment.id);
+      return "not_captured";
     } else {
       // Unknown outcome (timeout, 5xx). Keep the claim; retrying reuses the same PayPal-Request-Id.
       logProviderError("capture", payment.orderId, error);
