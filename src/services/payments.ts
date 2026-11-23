@@ -180,10 +180,14 @@ export async function startPayPalCheckout(
   }
 
   let created: PayPalOrder;
+  const requestId = crypto.randomUUID();
   try {
     created = await paypal.createOrder({
-      requestId: crypto.randomUUID(),
+      requestId,
       referenceId: `order-${order.id}`,
+      // Unique per attempt, not per order: order ids restart in every database (local, tests, other
+      // stores on the same PayPal account) and PayPal refuses a reused invoice id.
+      invoiceId: `order-${order.id}-${requestId}`,
       description: `Northwind Coffee order #${order.id}`,
       amountCents: order.totalCents,
       currency: order.currency,

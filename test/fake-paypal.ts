@@ -48,6 +48,7 @@ export class FakePayPal {
   readonly requests: RecordedRequest[] = [];
   private readonly idempotent = new Map<string, { status: number; body: Json }>();
   private readonly tokens = new Set<string>();
+  private readonly invoiceIds = new Set<string>();
 
   /** Status PayPal gives new captures. */
   captureStatus: "COMPLETED" | "PENDING" = "COMPLETED";
@@ -55,10 +56,13 @@ export class FakePayPal {
   refundStatus: "COMPLETED" | "PENDING" = "COMPLETED";
   /** Next capture is declined with 422 INSTRUMENT_DECLINED. */
   declineNextCapture = false;
-  /** Next order creation fails with a 503. */
-  failNextCreate = false;
-  /** Process the next matching call, then lose the response (503), like a timeout after success. */
-  loseNextResponseFor: "capture" | "refund" | null = null;
+  /** The next v2 requests (any route) fail with these transient errors, one each, before being processed. */
+  failNext: { status: 429 | 500 | 503; name: string }[] = [];
+  /**
+   * Process the next matching call, then lose its response (503) `times` times in a row, retries
+   * included, like a timeout after PayPal did the work.
+   */
+  loseResponses: { kind: "capture" | "refund"; times: number } | null = null;
   /** Next refund is refused with 422 and this issue. */
   refuseNextRefund: string | null = null;
   /** Next capture request is rejected outright with this HTTP status (e.g. 400), as PayPal does for bad requests. */
@@ -121,18 +125,23 @@ export class FakePayPal {
       return json(415, { name: "UNSUPPORTED_MEDIA_TYPE", message: "The request payload is not supported" });
     }
 
+    const transient = this.failNext.shift();
+    if (transient) return json(transient.status, { name: transient.name, message: "fake transient failure" });
+
+    const kind = /\/capture$/.test(path) ? "capture" : /\/refund$/.test(path) ? "refund" : null;
+    const lose = (response: Response): Response => {
+      if (!kind || this.loseResponses?.kind !== kind) return response;
+      this.loseResponses.times -= 1;
+      if (this.loseResponses.times <= 0) this.loseResponses = null;
+      return json(503, { name: "SERVICE_UNAVAILABLE" });
+    };
     if (requestId && this.idempotent.has(`${path}|${requestId}`)) {
       const cached = this.idempotent.get(`${path}|${requestId}`) as { status: number; body: Json };
-      return json(cached.status, cached.body);
+      return lose(json(cached.status, cached.body));
     }
     const remember = (status: number, responseBody: Json): Response => {
       if (requestId) this.idempotent.set(`${path}|${requestId}`, { status, body: responseBody });
       return json(status, responseBody);
-    };
-    const lose = (kind: "capture" | "refund", response: Response): Response => {
-      if (this.loseNextResponseFor !== kind) return response;
-      this.loseNextResponseFor = null;
-      return json(503, { name: "SERVICE_UNAVAILABLE" });
     };
 
     const param = (method: string, pattern: RegExp): string | null =>
@@ -144,13 +153,19 @@ export class FakePayPal {
     const getRefundId = param("GET", /^\/v2\/payments\/refunds\/([A-Z0-9]+)$/);
 
     if (request.method === "POST" && path === "/v2/checkout/orders") {
-      if (this.failNextCreate) {
-        this.failNextCreate = false;
-        return json(503, { name: "SERVICE_UNAVAILABLE" });
-      }
       const unit = (body?.purchase_units as Json[] | undefined)?.[0] as {
         amount: { value: string; currency_code: string };
+        invoice_id?: unknown;
       };
+      // Like the PayPal account behind the gateway: an invoice id is required and may not be reused.
+      if (typeof unit.invoice_id !== "string" || unit.invoice_id === "") {
+        return json(400, {
+          name: "INVALID_REQUEST",
+          details: [{ field: "/purchase_units/0/invoice_id", issue: "MISSING_REQUIRED_PARAMETER" }],
+        });
+      }
+      if (this.invoiceIds.has(unit.invoice_id)) return unprocessable("DUPLICATE_INVOICE_ID");
+      this.invoiceIds.add(unit.invoice_id);
       const id = randomId();
       this.orders.set(id, {
         id,
@@ -194,7 +209,7 @@ export class FakePayPal {
       this.captures.set(capture.id, capture);
       order.status = "COMPLETED";
       order.captureId = capture.id;
-      return lose("capture", remember(201, orderJson(order, capture)));
+      return lose(remember(201, orderJson(order, capture)));
     }
 
     if (getOrderId) {
@@ -229,7 +244,7 @@ export class FakePayPal {
         captureId: capture.id,
       };
       this.refunds.set(refund.id, refund);
-      return lose("refund", remember(201, refundJson(refund)));
+      return lose(remember(201, refundJson(refund)));
     }
 
     if (getRefundId) {

@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { listPaymentsForOrder, listRefundsForOrder } from "../src/db/payments";
+import { PAYPAL_MAX_ATTEMPTS } from "../src/lib/paypal";
 import { getOrder } from "../src/services/orders";
 import { type FakePayPal, installFakePayPal } from "./fake-paypal";
 import { Browser, checkoutKeyFrom, createTestUser, validAddress } from "./helpers";
@@ -181,6 +182,61 @@ describe("PayPal checkout", () => {
     for (const post of posts) expect(post.contentType, post.path).toBe("application/json");
   });
 
+  it("sends PayPal a unique invoice id for every payment attempt", async () => {
+    const paypal = installFakePayPal();
+    const { browser, orderId } = await customerWithOrder();
+    const first = await startPayment(browser, orderId);
+    paypal.approve(first);
+    paypal.declineNextCapture = true;
+    expect(await returnFromPayPal(browser, orderId, first)).toBe("declined");
+    const second = await startPayment(browser, orderId);
+    paypal.approve(second);
+    expect(await returnFromPayPal(browser, orderId, second)).toBe("paid");
+
+    const invoiceIds = paypal.calls("POST", /\/v2\/checkout\/orders$/).map((r) => {
+      const unit = (r.body?.purchase_units as { invoice_id?: string }[] | undefined)?.[0];
+      return unit?.invoice_id;
+    });
+    expect(invoiceIds).toHaveLength(2);
+    for (const id of invoiceIds) expect(id).toMatch(new RegExp(`^order-${orderId}-[0-9a-f-]{36}$`));
+    expect(invoiceIds[0]).not.toBe(invoiceIds[1]);
+  });
+
+  it("rides out PayPal rate limiting and brief outages without failing the checkout", async () => {
+    const paypal = installFakePayPal();
+    const { browser, orderId } = await customerWithOrder();
+    paypal.failNext = [{ status: 429, name: "RATE_LIMIT_REACHED" }];
+    const token = await startPayment(browser, orderId);
+    const creates = paypal.calls("POST", /\/v2\/checkout\/orders$/);
+    expect(creates).toHaveLength(2);
+    expect(creates[1]?.requestId).toBe(creates[0]?.requestId);
+
+    paypal.approve(token);
+    paypal.failNext = [
+      { status: 503, name: "SERVICE_UNAVAILABLE" },
+      { status: 500, name: "INTERNAL_SERVER_ERROR" },
+    ];
+    expect(await returnFromPayPal(browser, orderId, token)).toBe("paid");
+    const captures = paypal.calls("POST", /\/capture$/);
+    expect(captures).toHaveLength(3);
+    expect(new Set(captures.map((c) => c.requestId)).size).toBe(1);
+    expect(paypal.captures.size).toBe(1);
+    expect(await orderStatus(orderId)).toBe("paid");
+  });
+
+  it("recovers a capture whose response was lost once by retrying with the same key, capturing once", async () => {
+    const paypal = installFakePayPal();
+    const { browser, orderId } = await customerWithOrder();
+    const token = await startPayment(browser, orderId);
+    paypal.approve(token);
+    paypal.loseResponses = { kind: "capture", times: 1 };
+    expect(await returnFromPayPal(browser, orderId, token)).toBe("paid");
+    const captures = paypal.calls("POST", /\/capture$/);
+    expect(captures).toHaveLength(2);
+    expect(captures[1]?.requestId).toBe(captures[0]?.requestId);
+    expect(paypal.captures.size).toBe(1);
+  });
+
   for (const rejection of [
     { status: 415, name: "UNSUPPORTED_MEDIA_TYPE" },
     { status: 400, name: "INVALID_REQUEST" },
@@ -215,7 +271,7 @@ describe("PayPal checkout", () => {
     const { browser, orderId } = await customerWithOrder();
     const token = await startPayment(browser, orderId);
     paypal.approve(token);
-    paypal.loseNextResponseFor = "capture";
+    paypal.loseResponses = { kind: "capture", times: PAYPAL_MAX_ATTEMPTS };
 
     expect(await returnFromPayPal(browser, orderId, token)).toBe("error");
     expect(await orderStatus(orderId)).toBe("awaiting_payment");
@@ -231,8 +287,8 @@ describe("PayPal checkout", () => {
 
     expect(await returnFromPayPal(browser, orderId, token)).toBe("paid");
     const captureCalls = paypal.calls("POST", /\/capture$/);
-    expect(captureCalls).toHaveLength(2);
-    expect(captureCalls[1]?.requestId).toBe(captureCalls[0]?.requestId);
+    expect(captureCalls).toHaveLength(PAYPAL_MAX_ATTEMPTS + 1);
+    expect(new Set(captureCalls.map((c) => c.requestId)).size).toBe(1);
     expect(paypal.captures.size).toBe(1);
     expect(await orderStatus(orderId)).toBe("paid");
   });
@@ -323,9 +379,13 @@ describe("PayPal checkout", () => {
 
   it("shows a friendly error when PayPal is unavailable", async () => {
     const paypal = installFakePayPal();
-    paypal.failNextCreate = true;
     const { browser, orderId } = await customerWithOrder();
+    paypal.failNext = Array.from({ length: PAYPAL_MAX_ATTEMPTS }, () => ({
+      status: 503 as const,
+      name: "SERVICE_UNAVAILABLE",
+    }));
     const response = await browser.post(`/orders/${orderId}/pay`);
+    expect(paypal.calls("POST", /\/v2\/checkout\/orders$/)).toHaveLength(PAYPAL_MAX_ATTEMPTS);
     expect(response.headers.get("location")).toBe(`/orders/${orderId}?payment=provider_error`);
     expect(await listPaymentsForOrder(env.DB, orderId)).toHaveLength(0);
     const page = await browser.get(`/orders/${orderId}?payment=provider_error`);
@@ -438,7 +498,7 @@ describe("admin payment status and refunds", () => {
     const { orderId } = await paidOrder(paypal);
     const admin = await adminBrowser();
     const key = await refundForm(admin, orderId);
-    paypal.loseNextResponseFor = "refund";
+    paypal.loseResponses = { kind: "refund", times: PAYPAL_MAX_ATTEMPTS };
 
     const first = await admin.post(`/admin/orders/${orderId}/refund`, { refundKey: key, amount: "22.50" });
     expect(first.status).toBe(200);
@@ -453,7 +513,9 @@ describe("admin payment status and refunds", () => {
     const retry = await admin.post(`/admin/orders/${orderId}/payment-sync`);
     expect(retry.headers.get("location")).toBe(`/admin/orders/${orderId}?notice=synced`);
     expect(paypal.refunds.size).toBe(1);
-    expect(paypal.calls("POST", /\/refund$/).map((c) => c.requestId)).toEqual([key, key]);
+    expect(paypal.calls("POST", /\/refund$/).map((c) => c.requestId)).toEqual(
+      Array.from({ length: PAYPAL_MAX_ATTEMPTS + 1 }, () => key),
+    );
     expect(await orderStatus(orderId)).toBe("refunded");
   });
 

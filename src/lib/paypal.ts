@@ -58,6 +58,8 @@ export interface PayPalClient {
   createOrder(input: {
     requestId: string;
     referenceId: string;
+    /** Must be unique per PayPal account: PayPal refuses a reused invoice id (DUPLICATE_INVOICE_ID). */
+    invoiceId: string;
     description: string;
     amountCents: Cents;
     currency: string;
@@ -80,6 +82,15 @@ export interface PayPalClient {
 }
 
 const TIMEOUT_MS = 20_000;
+/**
+ * Attempts per call when PayPal or the gateway answers 429 or 5xx. Retrying is safe: GETs are
+ * read-only and every POST that changes money carries a PayPal-Request-Id, so a retry of a request
+ * PayPal already processed returns the original result instead of doing it twice.
+ */
+export const PAYPAL_MAX_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [200, 600];
+const MAX_RETRY_AFTER_MS = 2_000;
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 /** Approval links must point at PayPal itself before we redirect a buyer there. */
 const APPROVAL_HOSTS = new Set(["www.paypal.com", "www.sandbox.paypal.com"]);
 
@@ -116,10 +127,20 @@ export function paypalConfigFromEnv(env: {
 export function createPayPalClient(config: PayPalConfig): PayPalClient {
   const url = (path: string) => `${config.apiBase}${path}`;
 
+  /** Sends a request, retrying transient failures (429, 5xx). `init` is called per attempt. */
+  async function send(path: string, init: () => Promise<RequestInit>): Promise<Response> {
+    for (let attempt = 1; ; attempt += 1) {
+      const response = await fetch(url(path), { ...(await init()), signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (!TRANSIENT_STATUSES.has(response.status) || attempt >= PAYPAL_MAX_ATTEMPTS) return response;
+      await response.body?.cancel();
+      await sleep(retryDelayMs(response, attempt));
+    }
+  }
+
   async function accessToken(): Promise<string> {
     const key = `${config.apiBase}|${config.clientId}`;
     if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) return cachedToken.token;
-    const response = await fetch(url("/v1/oauth2/token"), {
+    const response = await send("/v1/oauth2/token", async () => ({
       method: "POST",
       headers: {
         authorization: `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`,
@@ -127,8 +148,7 @@ export function createPayPalClient(config: PayPalConfig): PayPalClient {
         accept: "application/json",
       },
       body: "grant_type=client_credentials",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    }));
     if (!response.ok) throw await apiError(response);
     const body = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
     if (typeof body.access_token !== "string") throw new Error("PayPal token response had no access_token");
@@ -144,20 +164,18 @@ export function createPayPalClient(config: PayPalConfig): PayPalClient {
     options: { body?: unknown; requestId?: string } = {},
   ): Promise<unknown> {
     for (let attempt = 0; ; attempt += 1) {
-      const headers: Record<string, string> = {
-        authorization: `Bearer ${await accessToken()}`,
-        accept: "application/json",
-        prefer: "return=representation",
-      };
-      // PayPal rejects POSTs without a JSON content type (415 UNSUPPORTED_MEDIA_TYPE), even with no
-      // body, e.g. capturing an order.
-      if (method === "POST") headers["content-type"] = "application/json";
-      if (options.requestId) headers["paypal-request-id"] = options.requestId;
-      const response = await fetch(url(path), {
-        method,
-        headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+      const response = await send(path, async () => {
+        const headers: Record<string, string> = {
+          authorization: `Bearer ${await accessToken()}`,
+          accept: "application/json",
+          prefer: "return=representation",
+        };
+        // PayPal rejects POSTs without a JSON content type (415 UNSUPPORTED_MEDIA_TYPE), even with no
+        // body, e.g. capturing an order.
+        if (method === "POST") headers["content-type"] = "application/json";
+        // The same key on every retry, so PayPal processes the request at most once.
+        if (options.requestId) headers["paypal-request-id"] = options.requestId;
+        return { method, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) };
       });
       if (response.status === 401 && attempt === 0) {
         // Token revoked or expired early: fetch a new one and retry once.
@@ -178,6 +196,7 @@ export function createPayPalClient(config: PayPalConfig): PayPalClient {
           {
             reference_id: input.referenceId,
             custom_id: input.referenceId,
+            invoice_id: input.invoiceId,
             description: input.description,
             amount: { currency_code: input.currency, value: centsToDecimal(input.amountCents) },
           },
@@ -221,6 +240,18 @@ export function createPayPalClient(config: PayPalConfig): PayPalClient {
       return toRefund(await call("GET", `/v2/payments/refunds/${encodeURIComponent(refundId)}`));
     },
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Backoff before the next attempt; honours a numeric Retry-After (capped) when PayPal sends one. */
+function retryDelayMs(response: Response, attempt: number): number {
+  const fallback = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length) - 1] ?? 0;
+  const retryAfter = Number(response.headers.get("retry-after"));
+  if (!Number.isFinite(retryAfter) || retryAfter <= 0) return fallback;
+  return Math.min(Math.max(retryAfter * 1000, fallback), MAX_RETRY_AFTER_MS);
 }
 
 async function apiError(response: Response): Promise<PayPalApiError> {
