@@ -51,6 +51,26 @@ export async function insertPaymentClaim(
     .run();
 }
 
+/**
+ * Returns the order's PayPal invoice ID, storing `candidate` first when the order has none yet. One statement, so
+ * concurrent callers all get the value that was stored first. Null when the order does not exist.
+ */
+export async function ensurePaypalInvoiceId(
+  db: D1Database,
+  orderId: number,
+  candidate: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `UPDATE orders SET paypal_invoice_id = COALESCE(paypal_invoice_id, ?2)
+       WHERE id = ?1
+       RETURNING paypal_invoice_id`,
+    )
+    .bind(orderId, candidate)
+    .first<{ paypal_invoice_id: string }>();
+  return row?.paypal_invoice_id ?? null;
+}
+
 /** Releases a checkout claim that PayPal refused (only while it is still being created with this request id). */
 export async function deletePaymentClaim(db: D1Database, orderId: number, requestId: string): Promise<void> {
   await db

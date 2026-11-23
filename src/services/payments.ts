@@ -17,6 +17,16 @@ export type { PaymentState, RefundState };
 /** A capture claim older than this is treated as abandoned and re-checked with PayPal. */
 const STALE_CAPTURE_MS = 2 * 60 * 1000;
 
+/**
+ * Marks an invoice ID as this store's in the PayPal merchant account. The random part keeps IDs apart across
+ * databases that number their orders independently (local, test, production) but share one merchant account.
+ */
+const INVOICE_ID_PREFIX = "NWC";
+
+function newInvoiceId(orderId: number): string {
+  return `${INVOICE_ID_PREFIX}-${orderId}-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
 }
@@ -263,6 +273,9 @@ async function createPaypalOrder(
   signal: AbortSignal,
 ): Promise<StartCheckoutResult> {
   const orderId = payment.order_id;
+  // One invoice ID per store order, stored before the first createOrder and reused by every later one.
+  const invoiceId = await paymentsDb.ensurePaypalInvoiceId(db, orderId, newInvoiceId(orderId));
+  if (!invoiceId) throw new Error(`order ${orderId} vanished while starting its PayPal checkout`);
   let created: PaypalOrder;
   try {
     created = await paypal.client.orders.createOrder(
@@ -270,7 +283,12 @@ async function createPaypalOrder(
         payPalRequestId: payment.request_id,
         body: {
           intent: "CAPTURE",
-          purchaseUnits: [{ amount: { currencyCode: payment.currency, value: toDecimalAmount(payment.amount_cents) } }],
+          purchaseUnits: [
+            {
+              amount: { currencyCode: payment.currency, value: toDecimalAmount(payment.amount_cents) },
+              invoiceId,
+            },
+          ],
           paymentSource: {
             paypal: { experienceContext: { returnUrl: input.returnUrl, cancelUrl: input.cancelUrl } },
           },

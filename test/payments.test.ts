@@ -125,8 +125,22 @@ function capturedOrder(id: string, capture: { id: string; status: string; value:
   });
 }
 
+/** The invoice_id each createOrder call sent, in order. */
+function sentInvoiceIds(): unknown[] {
+  return fake
+    .callsTo("POST", /^\/v2\/checkout\/orders$/)
+    .map((c) => (c.json?.purchase_units as { invoice_id?: unknown }[] | undefined)?.[0]?.invoice_id);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Store helpers
+
+async function storedInvoiceId(orderId: number): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT paypal_invoice_id FROM orders WHERE id = ?1")
+    .bind(orderId)
+    .first<{ paypal_invoice_id: string | null }>();
+  return row?.paypal_invoice_id ?? null;
+}
 
 /** A signed-in customer with an order of 3 × $7.50 = $22.50. */
 async function customerWithOrder(): Promise<{ browser: Browser; orderId: number }> {
@@ -220,7 +234,11 @@ describe("starting a PayPal checkout", () => {
     // Only keys a row of the contract sheet requires (the experience context also carries the SDK's own defaults).
     expect(Object.keys(create.json ?? {}).sort()).toEqual(["intent", "payment_source", "purchase_units"]);
     expect(create.json?.intent).toBe("CAPTURE");
-    expect(create.json?.purchase_units).toEqual([{ amount: { currency_code: "USD", value: "22.50" } }]);
+    const invoiceId = await storedInvoiceId(orderId);
+    expect(invoiceId).toMatch(new RegExp(`^NWC-${orderId}-[0-9a-f]{16}$`));
+    expect(create.json?.purchase_units).toEqual([
+      { amount: { currency_code: "USD", value: "22.50" }, invoice_id: invoiceId },
+    ]);
     const source = create.json?.payment_source as
       { paypal: { experience_context: Record<string, unknown> } } | undefined;
     const context = source?.paypal.experience_context ?? {};
@@ -289,6 +307,70 @@ describe("starting a PayPal checkout", () => {
     expect(second.headers.get("location")).toBe(`${APPROVAL_HOST}/checkoutnow?token=${paypalOrderId}`);
     const sent = fake.callsTo("POST", /^\/v2\/checkout\/orders$/).map((c) => c.headers.get("paypal-request-id"));
     expect(sent).toEqual([claim?.request_id, claim?.request_id]);
+    const invoiceId = await storedInvoiceId(orderId);
+    expect(invoiceId).not.toBeNull();
+    expect(sentInvoiceIds()).toEqual([invoiceId, invoiceId]);
+  });
+
+  it("keeps the order's invoice ID when PayPal refused the first attempt", async () => {
+    const { browser, orderId } = await customerWithOrder();
+    const paypalOrderId = nextId("PPO");
+    fake.on(
+      "POST",
+      /^\/v2\/checkout\/orders$/,
+      () => paypalError(422, "PAYEE_ACCOUNT_RESTRICTED", "The merchant account is restricted."),
+      () => createdOrder(paypalOrderId),
+    );
+
+    expect((await browser.post(`/orders/${orderId}/pay`)).status).toBe(422);
+    expect(await getPayment(env.DB, orderId)).toBeNull();
+    const second = await browser.post(`/orders/${orderId}/pay`);
+
+    expect(second.status).toBe(303);
+    const invoiceId = await storedInvoiceId(orderId);
+    expect(invoiceId).not.toBeNull();
+    expect(sentInvoiceIds()).toEqual([invoiceId, invoiceId]);
+  });
+
+  it("keeps the order's invoice ID when a new PayPal order replaces an expired one", async () => {
+    const { browser, orderId } = await customerWithOrder();
+    const [firstId, secondId] = [nextId("PPO"), nextId("PPO")];
+    fake.on(
+      "POST",
+      /^\/v2\/checkout\/orders$/,
+      () => createdOrder(firstId),
+      () => createdOrder(secondId),
+    );
+    fake.on("GET", new RegExp(`^/v2/checkout/orders/${firstId}$`), () =>
+      paypalError(404, "RESOURCE_NOT_FOUND", "The specified resource does not exist."),
+    );
+
+    await browser.post(`/orders/${orderId}/pay`);
+    const again = await browser.post(`/orders/${orderId}/pay`);
+
+    expect(again.headers.get("location")).toBe(`${APPROVAL_HOST}/checkoutnow?token=${secondId}`);
+    const creates = fake.callsTo("POST", /^\/v2\/checkout\/orders$/);
+    expect(new Set(creates.map((c) => c.headers.get("paypal-request-id"))).size).toBe(2);
+    const invoiceId = await storedInvoiceId(orderId);
+    expect(sentInvoiceIds()).toEqual([invoiceId, invoiceId]);
+  });
+
+  it("gives every store order its own invoice ID, and the database refuses a duplicate", async () => {
+    const first = await customerWithOrder();
+    const second = await customerWithOrder();
+    fake.on("POST", /^\/v2\/checkout\/orders$/, () => createdOrder(nextId("PPO")));
+
+    await first.browser.post(`/orders/${first.orderId}/pay`);
+    await second.browser.post(`/orders/${second.orderId}/pay`);
+
+    const [a, b] = [await storedInvoiceId(first.orderId), await storedInvoiceId(second.orderId)];
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toBe(b);
+    expect(sentInvoiceIds()).toEqual([a, b]);
+    await expect(
+      env.DB.prepare("UPDATE orders SET paypal_invoice_id = ?1 WHERE id = ?2").bind(a, second.orderId).run(),
+    ).rejects.toThrow(/UNIQUE constraint failed/);
   });
 
   it("returns PayPal's 4xx and reason, and releases the claim", async () => {

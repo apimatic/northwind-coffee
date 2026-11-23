@@ -207,8 +207,14 @@ export class PaypalSim {
       if (!requestId) return error(400, "INVALID_REQUEST", "MISSING_REQUEST_ID", "PayPal-Request-Id is required.");
       const existing = this.ordersByRequestId.get(requestId);
       if (existing) return json(200, this.minimal(existing));
-      const unit = (body?.purchase_units as { amount: { currency_code: string; value: string } }[] | undefined)?.[0];
+      const unit = (
+        body?.purchase_units as { amount: { currency_code: string; value: string }; invoice_id?: string }[] | undefined
+      )?.[0];
       if (!unit) return error(400, "INVALID_REQUEST", "MISSING_REQUIRED_PARAMETER", "purchase_units is required.");
+      // From 1 Dec 2026 every purchase unit needs an invoice_id.
+      if (!unit.invoice_id) {
+        return error(400, "INVALID_REQUEST", "MISSING_REQUIRED_PARAMETER", "purchase_units[0].invoice_id is required.");
+      }
       const order: SimOrder = {
         id: this.nextId("SIMORDER"),
         requestId,

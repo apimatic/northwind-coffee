@@ -78,6 +78,11 @@ Every non-GET gets a per-call SDK `Idempotency-Key` (not shared across our own r
   `payPalClientMetadataId`, `payPalAuthAssertion`).
 - `OrderRequest`: `intent: CheckoutPaymentIntent` (required; `"CAPTURE"`), `purchaseUnits: PurchaseUnitRequest[]`
   (required), `paymentSource?: PaymentSource`.
+  - `PurchaseUnitRequest.invoiceId` (wire `invoice_id`): optional in published 2.29.0, **required** in the
+    2.29.0-hypothetical.invoiceid build that models PayPal's 1 Dec 2026 rule (required, unique within the merchant
+    account). Always sent: `orders.paypal_invoice_id` (`NWC-<order id>-<16 hex>`), assigned once per store order by
+    `ensurePaypalInvoiceId` (one `UPDATE … COALESCE … RETURNING`, unique index) before the first createOrder, and
+    reused by every replay, retry after a refusal, and new PayPal order after a decline or expiry.
   - `PurchaseUnitRequest.amount: AmountWithBreakdown` (required) = `{ currencyCode: string; value: string }`.
   - `PaymentSource.paypal?: PayPalWallet` → `experienceContext?: PayPalWalletExperienceContext` →
     `returnUrl?: string`, `cancelUrl?: string`. SDK fills defaults on encode: `shippingPreference: GET_FROM_FILE`,
@@ -198,14 +203,15 @@ whose answer and re-reads all time out. Every case ends with one PayPal order / 
 
 createOrder:
 
-| Field                                                                                                                                                       | What requires it                                               | Set it?                      |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------- |
-| `payPalRequestId`                                                                                                                                           | DUPLICATE CLAIMS + UNKNOWN OUTCOMES (createOrder replay)       | ✅ `request_id`              |
-| `prefer`                                                                                                                                                    | nothing (minimal returns `id`, `status`, `links` — all we use) | ❌ (SDK still sends default) |
-| `paymentSource.paypal.experienceContext.returnUrl` / `cancelUrl`                                                                                            | task: "approve on PayPal and come back to the store"           | ✅                           |
-| `purchaseUnits[].referenceId/customId/invoiceId/description/items/shipping/softDescriptor/payee`                                                            | nothing                                                        | ❌                           |
-| `experienceContext.brandName/locale/shippingPreference/userAction/landingPage/…`                                                                            | nothing (SDK fills its defaults)                               | ❌                           |
-| `payPalMockResponse`, `payPalPartnerAttributionId`, `payPalClientMetadataId`, `payPalAuthAssertion`, `processingInstruction`, `payer`, `applicationContext` | nothing                                                        | ❌                           |
+| Field                                                                                                                                                       | What requires it                                               | Set it?                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------- |
+| `payPalRequestId`                                                                                                                                           | DUPLICATE CLAIMS + UNKNOWN OUTCOMES (createOrder replay)       | ✅ `request_id`               |
+| `prefer`                                                                                                                                                    | nothing (minimal returns `id`, `status`, `links` — all we use) | ❌ (SDK still sends default)  |
+| `paymentSource.paypal.experienceContext.returnUrl` / `cancelUrl`                                                                                            | task: "approve on PayPal and come back to the store"           | ✅                            |
+| `purchaseUnits[].invoiceId`                                                                                                                                 | PayPal rule from 1 Dec 2026: required, unique per merchant     | ✅ `orders.paypal_invoice_id` |
+| `purchaseUnits[].referenceId/customId/description/items/shipping/softDescriptor/payee`                                                                      | nothing                                                        | ❌                            |
+| `experienceContext.brandName/locale/shippingPreference/userAction/landingPage/…`                                                                            | nothing (SDK fills its defaults)                               | ❌                            |
+| `payPalMockResponse`, `payPalPartnerAttributionId`, `payPalClientMetadataId`, `payPalAuthAssertion`, `processingInstruction`, `payer`, `applicationContext` | nothing                                                        | ❌                            |
 
 captureOrder:
 
